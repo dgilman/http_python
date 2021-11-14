@@ -42,7 +42,6 @@ class ContentNegotiatorMiddleware:
         ])
 
         start_response("200 OK", resp_headers)
-        # XXX content-length?
         return wrap_file(environ, open(serve_path, 'rb'))
 
 
