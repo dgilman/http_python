@@ -1,0 +1,200 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+		<title>reveal.js</title>
+
+		<link rel="stylesheet" href="dist/reset.css">
+		<link rel="stylesheet" href="dist/reveal.css">
+		<link rel="stylesheet" href="dist/theme/black.css">
+
+		<!-- Theme used for syntax highlighted code -->
+		<link rel="stylesheet" href="plugin/highlight/monokai.css">
+	</head>
+	<body>
+		<div class="reveal">
+			<div class="slides">
+				<section>
+                    <h2>HTTP fuckery</h2>
+                    <h4>David Gilman</h4>
+                    <br/>
+                    <h4><a href="https://pro-football-history.com">Pro Football History.com</a></h4>
+                </section>
+
+                <section>
+                    <h3>HTTP Content Negotiation</h3>
+                    <p>The client's request includes headers specifying which kinds of responses it can accept and prefers.</p>
+                    <p>Request:</p>
+                    <pre><code class="language-http hljs" data-trim>
+GET / HTTP/1.1
+Host: whatever.com
+Accept-Language: ru-RU, en-US
+                    </code></pre>
+                    <p>Response:</p>
+                    <pre><code class="language-http hljs" data-trim>
+HTTP/1.1 200 OK
+Content-Language: ru-RU
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h3>Not a good idea</h3>
+                    <ul>
+                        <li>A remnant from earlier visions of the Web</li>
+                        <li>Bad user interface through the browser to set language</li>
+                        <li>Global state is inconvenient for multilingual users</li>
+                        <li>Better served through the page's user experience</li>
+                        <li>Imagine if Wikipedia ussed Accept-Language</li>
+                    </ul>
+                </section>
+
+                <section>
+                    <h3><code>Content-Encoding</code> lives on</h3>
+                    <p>Used to negotiate different encodings of the same response content.</p>
+                    <p>Request:</p>
+                    <pre><code class="language-http hljs" data-trim>
+GET / HTTP/1.1
+Host: whatever.com
+Accept-Encoding: gzip, deflate, br, identity
+                    </code></pre>
+                    <p>Response:</p>
+                    <pre><code class="language-http hljs" data-trim>
+HTTP/1.1 200 OK
+Content-Encoding: gzip
+                    </code></pre>
+                </section>
+
+                <section>
+                    <h3><code>Content-Encoding</code> in 2021</h3>
+                    <ul>
+                        <li>Compress content for user experience and SEO wins</li>
+                        <li>Typically handled at the load balancer or reverse proxy layer</li>
+                        <li>Just-in-time compression often comes out ahead</li>
+                        <li>Ahead-of-time compression demands integration work but is most efficient. Often done to static assets</li>
+                    </ul>
+                </section>
+
+                <section>
+                    <h3><code>Content-Encoding</code> in WSGI</h3>
+                    <ul>
+                        <li>There's nothing stopping you from parsing <code>Accept-Encoding</code> in your Python web server even if it is a bad idea</li>
+                        <li>If you have to, consider extending/subclassing the static file handler of your web framework</li>
+                    </ul>
+                </section>
+
+                <section>
+                    <h3><code>Content-Encoding</code> in WSGI</h3>
+                    <pre><code class="language-python hljs" data-trim data-line-numbers="3|7|16-18|29-30">
+from werkzeug.serving import run_simple
+from werkzeug.wsgi import get_path_info, wrap_file
+from werkzeug.http import parse_accept_header
+from werkzeug.datastructures import EnvironHeaders
+
+class ContentNegotiatorMiddleware:
+    def __call__(self, environ, start_response):
+        path = get_path_info(environ)
+        local_path = os.path.join(os.getcwd() + path)
+        local_path_gz = os.path.join(local_path + ".gz")
+
+        parsed_headers = EnvironHeaders(environ)
+        accepted_encodings = parse_accept_header(parsed_headers.get("accept-encoding"))
+        resp_headers = []
+
+        if 'gzip' in accepted_encodings and os.path.exists(local_path_gz):
+            serve_path = local_path_gz
+            resp_headers.append(("Content-Encoding", "gzip"))
+        elif os.path.exists(local_path):
+            serve_path = local_path
+        else:
+            raise Exception("No.")
+
+        resp_headers.extend([
+            ("Content-Type", "text/plain; charset=UTF-8"),
+            ("Content-Length", str(os.stat(serve_path).st_size))
+        ])
+
+        start_response("200 OK", resp_headers)
+        return wrap_file(environ, open(serve_path, 'rb'))
+                    </code></pre>
+                </section>
+
+        <section>
+            <h3>Useful bits on content compression</h3>
+            <ul>
+                <li><a href="http://nginx.org/en/docs/http/ngx_http_gzip_static_module.html">ngx_http_gzip_static_module</a></li>
+                <li><a href="https://en.wikipedia.org/wiki/Brotli">Brotli</a> is supported by 90%+ of your users already, with marginally smaller file sizes at the cost of longer compression time</li>
+                <li><a href="https://github.com/google/zopfli">Zopfli</a> creates smaller zlib (gzip) files at the cost of longer compression time</li>
+                <li>Only use for ahead-of-time compression</li>
+            </ul>
+        </section>
+
+        <section>
+            <table>
+                <thead>
+                <tr>
+                    <th></th>
+                    <th>Original</th>
+                    <th>gzip -1</th>
+                    <th>gzip -9</th>
+                    <th>zopfli</th>
+                    <th>brotli</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr>
+                    <td>XML sitemap</td>
+                    <td>3.7 MB</td>
+                    <td>374 KB (10%)</td>
+                    <td>271 KB (7%)</td>
+                    <td>243 KB (7%)</td>
+                    <td>201 KB (5%)</td>
+                </tr>
+                <tr>
+                    <td style="white-space: nowrap">HTML file</td>
+                    <td>130 KB</td>
+                    <td>28 KB (22%)</td>
+                    <td>24 KB (18%)</td>
+                    <td>23 KB (17%)</td>
+                    <td>19 KB (14%)</td>
+                </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h3>HTTP Conditional Requests</h3>
+            <p>The client includes a validator with its request used conditionally by the server to change its response.</p>
+            <p>Request:</p>
+            <pre><code class="language-http hljs" data-trim>
+GET / HTTP/1.1
+Host: whatever.com
+Accept-Encoding: gzip, deflate, br, identity
+                    </code></pre>
+            <p>Response:</p>
+            <pre><code class="language-http hljs" data-trim>
+HTTP/1.1 200 OK
+Content-Encoding: gzip
+                    </code></pre>
+        </section>
+            </div>
+        </div>
+
+		<script src="dist/reveal.js"></script>
+		<script src="plugin/notes/notes.js"></script>
+		<script src="plugin/markdown/markdown.js"></script>
+		<script src="plugin/highlight/highlight.js"></script>
+		<script>
+			// More info about initialization & config:
+			// - https://revealjs.com/initialization/
+			// - https://revealjs.com/config/
+			Reveal.initialize({
+				hash: true,
+
+				// Learn about plugins: https://revealjs.com/plugins/
+				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
+			});
+		</script>
+	</body>
+</html>
